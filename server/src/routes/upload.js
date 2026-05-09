@@ -57,7 +57,7 @@ router.post('/chunk', upload.single('chunk'), (req, res) => {
 
 // 3) Merge chunks into a final file and register it in DB.
 router.post('/merge', (req, res) => {
-  const { hash, name, size, mime, total, folder_id } = req.body || {};
+  const { hash, name, size, mime, total, folder_id, expires_at } = req.body || {};
   if (!hash || !name || !total) return res.status(400).json({ error: 'hash,name,total required' });
 
   // If the file (by hash) already exists on disk, just register a new row (instant upload / dedup)
@@ -97,11 +97,18 @@ router.post('/merge', (req, res) => {
     if (!ok) folderId = null;
   }
 
+  // Optional expiry: pass a future unix-ms timestamp, or omit/null for no expiry.
+  let expiresAt = null;
+  if (expires_at != null && expires_at !== 0 && expires_at !== '') {
+    const n = Number(expires_at);
+    if (Number.isFinite(n) && n > Date.now()) expiresAt = n;
+  }
+
   const id = nanoid(10);
   db.prepare(
-    `INSERT INTO files (id, name, size, mime, hash, storage_key, folder_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, name, Number(size) || 0, mime || null, hash, storageKey, folderId, Date.now());
+    `INSERT INTO files (id, name, size, mime, hash, storage_key, folder_id, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, name, Number(size) || 0, mime || null, hash, storageKey, folderId, Date.now(), expiresAt);
 
   const row = db.prepare('SELECT * FROM files WHERE id = ?').get(id);
   res.json(row);

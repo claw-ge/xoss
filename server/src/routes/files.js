@@ -5,12 +5,21 @@ import db, { FILE_DIR } from '../db.js';
 
 const router = Router();
 
-// List files under a folder (null => root)
+// List files under a folder (null => root). Exclude expired.
 router.get('/', (req, res) => {
   const parentId = req.query.folder_id ? Number(req.query.folder_id) : null;
+  const now = Date.now();
   const rows = parentId
-    ? db.prepare('SELECT * FROM files WHERE folder_id = ? ORDER BY created_at DESC').all(parentId)
-    : db.prepare('SELECT * FROM files WHERE folder_id IS NULL ORDER BY created_at DESC').all();
+    ? db.prepare(
+        `SELECT * FROM files
+         WHERE folder_id = ? AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY created_at DESC`
+      ).all(parentId, now)
+    : db.prepare(
+        `SELECT * FROM files
+         WHERE folder_id IS NULL AND (expires_at IS NULL OR expires_at > ?)
+         ORDER BY created_at DESC`
+      ).all(now);
   res.json(rows);
 });
 
@@ -24,6 +33,21 @@ router.delete('/:id', (req, res) => {
     fs.rm(path.join(FILE_DIR, row.storage_key), { force: true }, () => {});
   }
   res.json({ ok: true });
+});
+
+// Update expiry: body { expires_at: number|null }
+// `null` / `0` => never expires
+router.patch('/:id/expiry', (req, res) => {
+  const row = db.prepare('SELECT id FROM files WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const raw = req.body?.expires_at;
+  const value = raw == null || raw === 0 || raw === '' ? null : Number(raw);
+  if (value !== null && (!Number.isFinite(value) || value < Date.now())) {
+    return res.status(400).json({ error: 'expires_at must be a future timestamp (ms) or null' });
+  }
+  db.prepare('UPDATE files SET expires_at = ? WHERE id = ?').run(value, req.params.id);
+  const updated = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
+  res.json(updated);
 });
 
 // Serve a file with Range support (needed for video/audio streaming & resumable downloads)
@@ -68,6 +92,7 @@ function streamFile(req, res, row, { disposition } = {}) {
 router.get('/:id/raw', (req, res) => {
   const row = db.prepare('SELECT * FROM files WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).send('not found');
+  if (row.expires_at && row.expires_at < Date.now()) return res.status(410).send('expired');
   streamFile(req, res, row, { disposition: 'inline' });
 });
 

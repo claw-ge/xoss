@@ -34,12 +34,32 @@ CREATE TABLE IF NOT EXISTS files (
   storage_key TEXT NOT NULL,             -- disk file name (= hash)
   folder_id   INTEGER,
   created_at  INTEGER NOT NULL,
+  expires_at  INTEGER,                   -- unix ms; NULL = never expires
   FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);
-CREATE INDEX IF NOT EXISTS idx_files_hash   ON files(hash);
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_files_folder  ON files(folder_id);
+CREATE INDEX IF NOT EXISTS idx_files_hash    ON files(hash);
+CREATE INDEX IF NOT EXISTS idx_files_expires ON files(expires_at);
 CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
 `);
+
+// Lightweight migration: add `expires_at` to pre-existing files tables.
+const cols = db.prepare('PRAGMA table_info(files)').all().map((c) => c.name);
+if (!cols.includes('expires_at')) {
+  db.exec('ALTER TABLE files ADD COLUMN expires_at INTEGER');
+}
 
 export default db;
